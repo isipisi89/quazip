@@ -1,63 +1,99 @@
-cmake_minimum_required(VERSION 2.6)
-project(QuaZip)
+# require 3.15 for GNUInstallDirs
+cmake_minimum_required(VERSION 3.15...3.18)
 
-# CMP0042: Explicitly acknowledge MACOSX_RPATH
-# (introduced in CMake 2.8.12, enabled by default in CMake 3.0,
-# and producing a warning when unset since 3.7.1)
-cmake_policy(SET CMP0042 NEW)
+project(QuaZip VERSION 1.3)
 
-option(BUILD_WITH_QT4 "Build QuaZip with Qt4 no matter if Qt5 was found" OFF)
+set(QUAZIP_LIB_VERSION ${QuaZip_VERSION})
+set(QUAZIP_LIB_SOVERSION 1.3.0)
 
-if( NOT BUILD_WITH_QT4 )
-    # try Qt5 first, and prefer that if found
-    find_package(Qt5Core QUIET)
+option(BUILD_SHARED_LIBS "" ON)
+option(QUAZIP_INSTALL "" ON)
+option(QUAZIP_USE_QT_ZLIB "" OFF)
+option(QUAZIP_ENABLE_TESTS "Build QuaZip tests" OFF)
+
+# Set the default value of `${QUAZIP_QT_MAJOR_VERSION}`.
+# We search quietly for Qt6, Qt5 and Qt4 in that order.
+# Qt6 and Qt5 provide config files for CMake.
+# Qt4 relies on `FindQt4.cmake`.
+find_package(
+  QT NAMES Qt6 Qt5
+  QUIET COMPONENTS Core
+)
+if (NOT QT_FOUND)
+  find_package(Qt4 QUIET COMPONENTS QtCore)
+  if (Qt4_FOUND)
+    set(QT_VERSION_MAJOR 4)
+  else()
+    # If neither 6, 5 nor 4 are found, we default to 5.
+    # The setup will fail further down.
+    set(QT_VERSION_MAJOR 5)
+  endif()
 endif()
 
-if(Qt5Core_FOUND)
-    set(CMAKE_CXX_STANDARD 11)
-    set(QTCORE_LIBRARIES ${Qt5Core_LIBRARIES})
-    set(QUAZIP_LIB_VERSION_SUFFIX 5)
-    # if there is no QT_ROOT, try to deduce it from Qt QtCore include
-    if("${QT_ROOT}" STREQUAL "")
-        set(QT_ROOT ${QT_QTCORE_INCLUDE_DIR}/../..)
-    endif()
-    include_directories(${Qt5Core_INCLUDE_DIRS})
+set(QUAZIP_QT_MAJOR_VERSION ${QT_VERSION_MAJOR} CACHE STRING "Qt version to use (4, 5 or 6), defaults to ${QT_VERSION_MAJOR}")
 
-    macro(qt_wrap_cpp)
-        qt5_wrap_cpp(${ARGN})
-    endmacro()
+if (QUAZIP_QT_MAJOR_VERSION EQUAL 6)
+    set(CMAKE_CXX_STANDARD 17)
 else()
-    set(qt_min_version "4.5.0")
-    find_package(Qt4 REQUIRED)
-    set(QT_USE_QTGUI false)
-    include(${QT_USE_FILE})
-    include_directories(${QT_INCLUDES})
-    set(QTCORE_LIBRARIES ${QT_QTCORE_LIBRARY})
-
-    macro(qt_wrap_cpp)
-        qt4_wrap_cpp(${ARGN})
-    endmacro()
+    set(CMAKE_CXX_STANDARD 14)
 endif()
 
-# Use system zlib on unix and Qt ZLIB on Windows
-if(UNIX OR MINGW)
+if(NOT CMAKE_BUILD_TYPE)
+	set(CMAKE_BUILD_TYPE RELEASE)
+endif()
+
+set(CMAKE_AUTOMOC ON)
+set(CMAKE_INCLUDE_CURRENT_DIR ON)
+set(CMAKE_DEBUG_POSTFIX d)
+
+set(QUAZIP_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
+set(QUAZIP_BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR})
+set(QUAZIP_LIB_FILE_NAME quazip${QuaZip_VERSION_MAJOR}-qt${QUAZIP_QT_MAJOR_VERSION})
+set(QUAZIP_LIB_TARGET_NAME QuaZip)
+set(QUAZIP_DIR_NAME QuaZip-Qt${QUAZIP_QT_MAJOR_VERSION}-${QUAZIP_LIB_VERSION})
+set(QUAZIP_PACKAGE_NAME QuaZip-Qt${QUAZIP_QT_MAJOR_VERSION})
+
+if(QUAZIP_QT_MAJOR_VERSION EQUAL 6)
+	find_package(Qt6 REQUIRED COMPONENTS Core Core5Compat
+                         OPTIONAL_COMPONENTS Network Test)
+	set(QUAZIP_LIB_LIBRARIES Qt6::Core Qt6::Core5Compat)
+	set(QUAZIP_TEST_QT_LIBRARIES Qt6::Core Qt6::Core5Compat Qt6::Network Qt6::Test)
+	set(QUAZIP_PKGCONFIG_REQUIRES "zlib, Qt6Core")
+elseif(QUAZIP_QT_MAJOR_VERSION EQUAL 5)
+	find_package(Qt5 REQUIRED COMPONENTS Core
+                         OPTIONAL_COMPONENTS Network Test)
+	set(QUAZIP_LIB_LIBRARIES Qt5::Core)
+	set(QUAZIP_TEST_QT_LIBRARIES Qt5::Core Qt5::Network Qt5::Test)
+	set(QUAZIP_PKGCONFIG_REQUIRES "zlib, Qt5Core")
+elseif(QUAZIP_QT_MAJOR_VERSION EQUAL 4)
+	find_package(Qt4 4.5.0 REQUIRED COMPONENTS QtCore
+                           OPTIONAL_COMPONENTS QtNetwork QtTest)
+	set(QUAZIP_LIB_LIBRARIES Qt4::QtCore)
+	set(QUAZIP_TEST_QT_LIBRARIES Qt4::QtCore Qt4::QtNetwork Qt4::QtTest)
+	set(QUAZIP_PKGCONFIG_REQUIRES "zlib, QtCore")
+else()
+	message(FATAL_ERROR "Qt version ${QUAZIP_QT_MAJOR_VERSION} is not supported")
+endif()
+
+message(STATUS "Using Qt version ${QUAZIP_QT_MAJOR_VERSION}")
+
+set(QUAZIP_QT_ZLIB_USED OFF)
+if(QUAZIP_USE_QT_ZLIB)
+    find_package(Qt${QUAZIP_QT_MAJOR_VERSION} OPTIONAL_COMPONENTS Zlib)
+    if (Qt${QUAZIP_QT_MAJOR_VERSION}Zlib_FOUND)
+        set(QUAZIP_LIB_LIBRARIES ${QUAZIP_LIB_LIBRARIES} Qt${QUAZIP_QT_MAJOR_VERSION}::Zlib)
+        set(QUAZIP_QT_ZLIB_USED ON)
+    endif()
+endif()
+if(NOT QUAZIP_QT_ZLIB_USED)
     find_package(ZLIB REQUIRED)
-else(UNIX OR MINGW)
-    set(ZLIB_INCLUDE_DIRS "${QT_ROOT}/src/3rdparty/zlib" CACHE STRING "Path to ZLIB headers of Qt")
-    set(ZLIB_LIBRARIES "")
-    if(NOT EXISTS "${ZLIB_INCLUDE_DIRS}/zlib.h")
-        message("Please specify a valid zlib include dir")
-    endif(NOT EXISTS "${ZLIB_INCLUDE_DIRS}/zlib.h")
-endif(UNIX OR MINGW)
-
-# All build libraries are moved to this directory
-set(LIBRARY_OUTPUT_PATH ${CMAKE_BINARY_DIR})
-
-set(LIB_SUFFIX "" CACHE STRING "Define suffix of directory name (32/64)")
-set(LIB_DESTINATION "${CMAKE_INSTALL_PREFIX}/lib${LIB_SUFFIX}" CACHE STRING "Library directory name" FORCE)
-set(QUAZIP_LIB_TARGET_NAME quazip${QUAZIP_LIB_VERSION_SUFFIX} CACHE
-    INTERNAL "Target name of libquazip" FORCE)
+    set(QUAZIP_LIB_LIBRARIES ${QUAZIP_LIB_LIBRARIES} ZLIB::ZLIB)
+endif()
 
 add_subdirectory(quazip)
 
-install(FILES FindQuaZip.cmake RENAME FindQuaZip${QUAZIP_LIB_VERSION_SUFFIX}.cmake DESTINATION ${CMAKE_ROOT}/Modules)
+if(QUAZIP_ENABLE_TESTS)
+    message(STATUS "Building QuaZip tests")
+    enable_testing()
+    add_subdirectory(qztest)
+endif()
